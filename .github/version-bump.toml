@@ -1,0 +1,15 @@
+# version-bump-bot's own version stream. The repo IS the bot, so no trigger:
+# every non-docs merge bumps. The two reusable workflows embed the release
+# tag; they are regex targets so `apply` rewrites them and `guard` protects them.
+[merge]
+skip_paths = ["docs/**", "**/*.md"]
+
+[[stream]]
+name = "version-bump-bot"
+source = { file = "pyproject.toml", format = "toml-path", path = "project.version" }
+targets = [
+  { file = ".github/workflows/bump.yml", regex = 'VERSION_BUMP_BOT_REF: v(?P<version>\d+\.\d+\.\d+)' },
+  { file = ".github/workflows/guard.yml", regex = 'VERSION_BUMP_BOT_REF: v(?P<version>\d+\.\d+\.\d+)' },
+]
+breaking = "major"
+tag = "v{version}"

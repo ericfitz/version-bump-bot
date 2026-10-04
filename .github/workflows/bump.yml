@@ -1,0 +1,204 @@
+# Reusable post-merge version bump. Callers: see README "Adopting a repo".
+# Design: docs/superpowers/specs/2026-10-03-version-bump-bot-design.md (Workflows / bump).
+#
+# No cascade, two independent guards:
+#   1. the job is skipped when the push actor is the App's bot user and the head
+#      commit subject starts with "chore(version)";
+#   2. `version-bump plan` folds only commits after the last one that changed a
+#      stream's source VALUE, and the bump commit changes those values.
+#
+# The release tag of THIS workflow is embedded below (a called workflow cannot
+# read its own ref). The self-adoption stream rewrites it on every release and
+# CI checks it against pyproject.toml.
+name: version-bump-bot bump
+
+on:
+  workflow_call:
+    inputs:
+      setup:
+        description: >-
+          Comma-separated toolchains the `after` hooks need: go, node, pnpm, uv, plus
+          name@version go-install entries (oapi-codegen@v2.7.1, or a full module path).
+        type: string
+        default: ""
+      app_slug:
+        description: Slug of the GitHub App whose bot user pushes the bump commit.
+        type: string
+        default: ericfitz-version-bump
+      bot_ref:
+        description: Ref of ericfitz/version-bump-bot to run (default is the embedded release tag).
+        type: string
+        default: ""
+      config:
+        description: Path of the version-bump config in the calling repo.
+        type: string
+        default: .github/version-bump.toml
+    secrets:
+      VERSION_BUMP_APP_ID:
+        required: true
+      VERSION_BUMP_APP_PRIVATE_KEY:
+        required: true
+
+env:
+  VERSION_BUMP_BOT_REF: v0.1.0
+  BOT_DIR: .version-bump-bot
+
+permissions:
+  contents: read
+
+jobs:
+  bump:
+    name: Version Bump
+    # Skip guard (1): the bot's own bump commit never starts a bump.
+    if: >-
+      ${{ !(github.actor == format('{0}[bot]', inputs.app_slug)
+            && startsWith(github.event.head_commit.message, 'chore(version)')) }}
+    runs-on: ubuntu-latest
+    concurrency:
+      group: version-bump-${{ github.repository }}
+      cancel-in-progress: false
+    env:
+      CONFIG: ${{ inputs.config }}
+    steps:
+      - name: Mint an App installation token
+        id: token
+        uses: actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349 # v2.2.2
+        with:
+          app-id: ${{ secrets.VERSION_BUMP_APP_ID }}
+          private-key: ${{ secrets.VERSION_BUMP_APP_PRIVATE_KEY }}
+
+      - name: Check out the default branch (full history and tags)
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          fetch-depth: 0
+          fetch-tags: true
+          token: ${{ steps.token.outputs.token }}
+          persist-credentials: true
+
+      - name: Check out version-bump-bot
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          repository: ericfitz/version-bump-bot
+          ref: ${{ inputs.bot_ref || env.VERSION_BUMP_BOT_REF }}
+          path: ${{ env.BOT_DIR }}
+          persist-credentials: false
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6.8.0
+        with:
+          python-version: "3.12"
+
+      - name: Plan
+        id: plan
+        run: |
+          set -euo pipefail
+          uv run --no-dev --project "$BOT_DIR" version-bump --config "$CONFIG" plan > "$RUNNER_TEMP/plan.json"
+          STOP_TOKEN="$(uuidgen)"
+          echo "::stop-commands::${STOP_TOKEN}"
+          cat "$RUNNER_TEMP/plan.json"
+          echo "::${STOP_TOKEN}::"
+          echo "bumped=$(jq '.streams | length' "$RUNNER_TEMP/plan.json")" >> "$GITHUB_OUTPUT"
+          if [ "$(jq '.streams | length' "$RUNNER_TEMP/plan.json")" = "0" ]; then
+            echo "::notice::Nothing to bump."
+          fi
+
+      - name: Set up Go
+        if: steps.plan.outputs.bumped != '0' && contains(format(',{0},', inputs.setup), ',go,')
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
+        with:
+          go-version-file: go.mod
+
+      - name: Set up Node
+        if: >-
+          steps.plan.outputs.bumped != '0'
+          && (contains(format(',{0},', inputs.setup), ',node,') || contains(format(',{0},', inputs.setup), ',pnpm,'))
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version-file: package.json
+
+      - name: Set up pnpm
+        if: steps.plan.outputs.bumped != '0' && contains(format(',{0},', inputs.setup), ',pnpm,')
+        uses: pnpm/action-setup@fc06bc1257f339d1d5d8b3a19a8cae5388b55320 # v4.4.0
+
+      - name: Install Go tools named in setup
+        if: steps.plan.outputs.bumped != '0' && contains(inputs.setup, '@')
+        env:
+          SETUP: ${{ inputs.setup }}
+        run: |
+          set -euo pipefail
+          IFS=',' read -r -a items <<<"$SETUP"
+          for item in "${items[@]}"; do
+            case "$item" in *@*) ;; *) continue ;; esac
+            name="${item%@*}"
+            ver="${item##*@}"
+            case "$name" in
+              oapi-codegen) mod="github.com/oapi-codegen/oapi-codegen/v2/cmd/oapi-codegen" ;;
+              */*) mod="$name" ;;
+              *) echo "::error::setup entry '$item': unknown tool; give a full Go module path"; exit 1 ;;
+            esac
+            go install "${mod}@${ver}"
+          done
+
+      - name: Apply
+        if: steps.plan.outputs.bumped != '0'
+        run: uv run --no-dev --project "$BOT_DIR" version-bump --config "$CONFIG" apply --plan "$RUNNER_TEMP/plan.json"
+
+      - name: Run after hooks
+        if: steps.plan.outputs.bumped != '0'
+        run: uv run --no-dev --project "$BOT_DIR" version-bump --config "$CONFIG" hooks --plan "$RUNNER_TEMP/plan.json"
+
+      - name: Re-plan the working tree (must be empty)
+        if: steps.plan.outputs.bumped != '0'
+        run: |
+          set -euo pipefail
+          uv run --no-dev --project "$BOT_DIR" version-bump --config "$CONFIG" plan --worktree > "$RUNNER_TEMP/replan.json"
+          if [ "$(jq '.streams | length' "$RUNNER_TEMP/replan.json")" != "0" ]; then
+            echo "::error::The working tree still has a pending bump after apply and hooks; the stream config is not self-consistent."
+            STOP_TOKEN="$(uuidgen)"
+            echo "::stop-commands::${STOP_TOKEN}"
+            cat "$RUNNER_TEMP/replan.json"
+            echo "::${STOP_TOKEN}::"
+            exit 1
+          fi
+
+      - name: Commit, tag and push atomically
+        if: steps.plan.outputs.bumped != '0'
+        env:
+          GH_TOKEN: ${{ steps.token.outputs.token }}
+          APP_SLUG: ${{ steps.token.outputs.app-slug }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          set -euo pipefail
+          BOT_USER="${APP_SLUG}[bot]"
+          BOT_ID="$(gh api "users/${BOT_USER}" --jq .id)"
+          git config user.name "$BOT_USER"
+          git config user.email "${BOT_ID}+${BOT_USER}@users.noreply.github.com"
+          jq -r '.commit_subject + "\n\n" + .commit_body' "$RUNNER_TEMP/plan.json" > "$RUNNER_TEMP/message.txt"
+          git add -u
+          # git commit and git log echo the commit subject (derived from PR titles).
+          STOP_TOKEN="$(uuidgen)"
+          echo "::stop-commands::${STOP_TOKEN}"
+          git commit -F "$RUNNER_TEMP/message.txt"
+          git --no-pager log -1 --stat
+          echo "::${STOP_TOKEN}::"
+          # Tags are created locally at the bump commit first: a conflicting existing
+          # tag fails here, before anything is pushed. Tag names never touch the shell
+          # as text; they travel through files and a quoted array.
+          uv run --no-dev --project "$BOT_DIR" version-bump --config "$CONFIG" tag --plan "$RUNNER_TEMP/plan.json" > "$RUNNER_TEMP/tags.json"
+          STOP_TOKEN="$(uuidgen)"
+          echo "::stop-commands::${STOP_TOKEN}"
+          cat "$RUNNER_TEMP/tags.json"
+          echo "::${STOP_TOKEN}::"
+          jq -r '.all[] | "refs/tags/" + .' "$RUNNER_TEMP/tags.json" > "$RUNNER_TEMP/tag-refs.txt"
+          mapfile -t TAG_REFS < "$RUNNER_TEMP/tag-refs.txt"
+          if git push --atomic origin "HEAD:refs/heads/${DEFAULT_BRANCH}" "${TAG_REFS[@]}"; then
+            exit 0
+          fi
+          git fetch origin "$DEFAULT_BRANCH"
+          if [ "$(git rev-parse "origin/${DEFAULT_BRANCH}")" != "$(git rev-parse 'HEAD^')" ]; then
+            echo "::notice::${DEFAULT_BRANCH} moved during this run; the newer push's own run folds everything."
+            exit 0
+          fi
+          echo "::error::The atomic push of ${DEFAULT_BRANCH} and the release tags was rejected although the branch did not move (see git's message above). The GitHub App '${APP_SLUG}' must be the bypass actor on the ${DEFAULT_BRANCH} ruleset and on any tag ruleset (run: version-bump doctor --app-id <APP_ID>)."
+          exit 1

@@ -1,0 +1,39 @@
+# Moves the major alias tag (v1) to every new release tag (v1.2.3) of this repo.
+# The bot's own `tag` subcommand never moves a tag; this alias is the one
+# deliberate exception, and it lives here, outside the bot.
+# Pushing v1.2.3 with the App token triggers this workflow; the alias v1 does
+# not match the pattern, so it cannot re-trigger itself.
+name: Move major alias tag
+
+on:
+  push:
+    tags:
+      - "v[0-9]+.[0-9]+.[0-9]+"
+
+permissions:
+  contents: read
+
+jobs:
+  alias:
+    name: Move major alias
+    runs-on: ubuntu-latest
+    steps:
+      - name: Mint an App installation token
+        id: token
+        uses: actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349 # v2.2.2
+        with:
+          app-id: ${{ secrets.VERSION_BUMP_APP_ID }}
+          private-key: ${{ secrets.VERSION_BUMP_APP_PRIVATE_KEY }}
+
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          token: ${{ steps.token.outputs.token }}
+          persist-credentials: true
+
+      - name: Force-move the alias
+        run: |
+          set -euo pipefail
+          MAJOR="${GITHUB_REF_NAME%%.*}"   # v1.2.3 -> v1
+          git tag -f "$MAJOR" "$GITHUB_SHA"
+          git push -f origin "refs/tags/${MAJOR}"
+          echo "::notice::${MAJOR} -> ${GITHUB_REF_NAME} (${GITHUB_SHA})"

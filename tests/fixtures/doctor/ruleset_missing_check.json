@@ -1,0 +1,6 @@
+{"id": 42, "name": "main", "target": "branch", "enforcement": "active",
+ "conditions": {"ref_name": {"include": ["~DEFAULT_BRANCH"], "exclude": []}},
+ "bypass_actors": [{"actor_id": 123456, "actor_type": "Integration", "bypass_mode": "always"}],
+ "rules": [
+   {"type": "pull_request", "parameters": {"required_approving_review_count": 0}}
+ ]}

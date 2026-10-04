@@ -1,0 +1,28 @@
+# This repo adopts its own bot. `uses: ./...` runs the workflows from the
+# current commit, and bot_ref points the bot checkout at the same commit, so
+# a release run never has to check out the tag it is about to create.
+name: Version
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  guard:
+    if: github.event_name == 'pull_request'
+    uses: ./.github/workflows/guard.yml
+    with:
+      bot_ref: ${{ github.event.pull_request.head.sha }}
+
+  bump:
+    if: github.event_name != 'pull_request'
+    uses: ./.github/workflows/bump.yml
+    with:
+      bot_ref: ${{ github.sha }}
+    secrets: inherit

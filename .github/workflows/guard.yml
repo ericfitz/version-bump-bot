@@ -1,0 +1,60 @@
+# Reusable PR guard: fails when a PR edits version state that only the
+# post-merge bump may write, then runs each stream's `verify` commands.
+# It depends on no other job, so it cannot fail transiently. The check
+# appears on the PR as "<caller job id> / Version Guard"; with the
+# recommended caller job id `guard` that is "guard / Version Guard".
+name: version-bump-bot guard
+
+on:
+  workflow_call:
+    inputs:
+      bot_ref:
+        description: Ref of ericfitz/version-bump-bot to run (default is the embedded release tag).
+        type: string
+        default: ""
+      config:
+        description: Path of the version-bump config in the calling repo.
+        type: string
+        default: .github/version-bump.toml
+
+env:
+  VERSION_BUMP_BOT_REF: v0.1.0
+  BOT_DIR: .version-bump-bot
+
+permissions:
+  contents: read
+
+jobs:
+  guard:
+    name: Version Guard
+    runs-on: ubuntu-latest
+    env:
+      CONFIG: ${{ inputs.config }}
+      BASE: ${{ github.event.pull_request.base.ref }}
+    steps:
+      - name: Check out the PR head (full history)
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Check out version-bump-bot
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          repository: ericfitz/version-bump-bot
+          ref: ${{ inputs.bot_ref || env.VERSION_BUMP_BOT_REF }}
+          path: ${{ env.BOT_DIR }}
+          persist-credentials: false
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6.8.0
+        with:
+          python-version: "3.12"
+
+      - name: Version Guard
+        run: |
+          set -euo pipefail
+          MB="$(git merge-base "origin/${BASE}" HEAD)"
+          echo "merge-base: $MB"
+          uv run --no-dev --project "$BOT_DIR" version-bump --config "$CONFIG" guard --base "$MB" --head HEAD

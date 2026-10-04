@@ -1,0 +1,7 @@
+line-length = 100
+target-version = "py311"
+extend-exclude = ["docs", ".superpowers"]   # ruff 0.16 formats Markdown code blocks; plan/spec docs are not ours to reformat
+
+[lint]
+select = ["E", "F", "I", "UP", "B", "W"]
+ignore = ["E501"]   # the formatter owns line length; long TOML/shell string literals are legitimate
