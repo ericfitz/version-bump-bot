@@ -79,7 +79,9 @@ def cmd_doctor(args: argparse.Namespace) -> int:
         app_id_num = int(app_id) if app_id else None
     except ValueError:
         raise VersionBumpError(f"app id must be an integer, got {app_id!r}") from None
-    findings = run_doctor(slug, repo / args.config, gh_fetch, app_id_num, args.check_name)
+    findings = run_doctor(
+        slug, repo / args.config, gh_fetch, app_id_num, args.check_name, repo_dir=repo
+    )
     print(format_report(findings))
     return 0 if all(f.ok for f in findings) else 1
 

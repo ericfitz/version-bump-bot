@@ -109,6 +109,22 @@ Visibility: if this repo is private, Settings -> Actions -> General -> Access mu
 allow workflows from Eric's other repositories, and the bot checkout inside the
 reusable workflows would need a token that can read it. A public repo needs neither.
 
+### Lockfiles
+
+Some lockfiles record the project's own version. The bot keeps that entry in sync with its manifest automatically; you don't configure anything.
+
+| Manifest (as a stream source or target) | Lockfile | Entry |
+|---|---|---|
+| `pyproject.toml`, `project.version` | `uv.lock` | the editable or virtual `[[package]]` with the project's name |
+| `package.json`, `version` | `npm-shrinkwrap.json`, else `package-lock.json` (lockfileVersion 2 or 3) | `packages["<dir>"].version`, plus the top-level `version` for the root package |
+| `Cargo.toml`, `package.version` | `Cargo.lock` | the `[[package]]` with the crate's name and no `source` |
+
+- **Lookup.** The bot looks for a lockfile in the manifest's directory, then each parent directory up to the repo root, and uses the first it finds, so workspaces are covered.
+- **Unusable lockfiles.** A lockfile whose entry can't be found (unexpected layout, an npm v1 lockfile, a missing project name) is skipped with a warning, and the bump goes ahead.
+- **The guard.** A PR may change a lockfile entry only to match its manifest. A PR that repairs drift passes. Drift that a PR leaves alone produces a warning, and the next bump fixes it.
+- **Not covered.** Workspace-inherited versions (`version.workspace = true`) and dynamic versions.
+- **Checking.** `version-bump doctor` lists the lockfiles the bot will keep in sync.
+
 ## Config: `.github/version-bump.toml`
 
 ```toml

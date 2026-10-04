@@ -15,6 +15,7 @@ from typing import Any
 from version_bump import gitops
 from version_bump.config import load_config
 from version_bump.errors import VersionBumpError
+from version_bump.lockfiles import discover, worktree_reader
 
 Fetch = Callable[[str], Any]
 _SLUG_RE = re.compile(r"github\.com[:/]([^/]+)/([^/]+?)(?:\.git)?/?$")
@@ -186,13 +187,22 @@ def run_doctor(
     fetch: Fetch,
     app_id: int | None,
     check_name: str = "Version Guard",
+    repo_dir: Path | None = None,
 ) -> list[Finding]:
     findings: list[Finding] = []
     try:
-        load_config(config_path)
+        config = load_config(config_path)
         findings.append(Finding(True, "config", f"{config_path} is valid"))
     except VersionBumpError as exc:
+        config = None
         findings.append(Finding(False, "config", str(exc), str(exc)))
+    if config is not None and repo_dir is not None:
+        locks = discover(config, worktree_reader(repo_dir))
+        for e in locks.entries:
+            detail = f"{e.file}: entry {e.name!r} follows {e.manifest.file} ({e.stream})"
+            findings.append(Finding(True, "lockfile", detail))
+        for w in locks.warnings:
+            findings.append(Finding(True, "lockfile", f"skipped: {w}"))
 
     repo = fetch(f"repos/{repo_slug}")
     findings.append(_check_merge_settings(repo_slug, repo))
