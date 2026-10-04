@@ -40,7 +40,7 @@ on:
         required: true
 
 env:
-  VERSION_BUMP_BOT_REF: v0.1.0
+  VERSION_BUMP_BOT_REF: v1.0.0
   BOT_DIR: .version-bump-bot
 
 permissions:

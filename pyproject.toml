@@ -1,6 +1,6 @@
 [project]
 name = "version-bump-bot"
-version = "0.1.0"
+version = "1.0.0"
 description = "Post-merge semantic-version bump bot: one bump per merged PR, driven by config."
 readme = "README.md"
 requires-python = ">=3.11"
