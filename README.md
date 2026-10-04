@@ -52,7 +52,7 @@ Do the steps in this order. The caller workflow goes in last: once it is on the
 default branch, every push runs `bump.yml` and every PR runs the guard.
 
 1. **Install the App** `ericfitz-version-bump` on the repo (Contents read/write,
-   Metadata read). Set the two secrets locally; values never go into chat or logs:
+   Workflows read/write, Metadata read). Set the two secrets locally; values never go into chat or logs:
    `gh secret set VERSION_BUMP_APP_ID` and `gh secret set VERSION_BUMP_APP_PRIVATE_KEY < key.pem`.
    Repos that run Dependabot also need them in the Dependabot secret store
    (`gh secret set --app dependabot ...`). The App and both secrets must exist
@@ -202,13 +202,11 @@ Merge policy here is the same as for adopters: squash-only, squash commit title 
 PR title.
 
 Before the first merge that includes `version.yml`, the App must be installed
-on this repo and both secrets set (see Adopting a repo, step 1).
-
-Pending owner decision: the self-adoption release push rewrites
-`.github/workflows/bump.yml` and `guard.yml`, so on THIS repo the App also needs
-the Workflows: read/write permission; without it GitHub rejects the push
-("refusing to allow a GitHub App to create or update workflow"), and the bump
-job then reports a misleading bypass-actor error below git's message. This is
-specific to this repo and is not part of the adopter permission list.
+on this repo and both secrets set (see AdoptThe App holds Workflows: read/write because the release push on this repo
+rewrites `.github/workflows/bump.yml` and `guard.yml`. Without that permission
+GitHub rejects the push ("refusing to allow a GitHub App to create or update
+workflow"), and the bump job then reports a misleading bypass-actor error below
+git's message. Adopters whose targets live under `.github/workflows/` rely on the
+same permission.opter permission list.
 
 The first release is a PR titled `feat!: release version-bump-bot 1.0.0`.
