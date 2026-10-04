@@ -218,7 +218,15 @@ def test_plan_json_shape(repo, cfg):
     repo.write("main.go", "package main // one\n")
     repo.commit("fix: one (#2)")
     d = json.loads(plan_of(repo, cfg).to_json())
-    assert set(d) == {"ref", "base", "pending", "streams", "commit_subject", "commit_body"}
+    assert set(d) == {
+        "ref",
+        "base",
+        "pending",
+        "streams",
+        "commit_subject",
+        "commit_body",
+        "warnings",
+    }
     assert set(d["pending"][0]) == {"commit", "subject", "streams"}
     assert set(d["streams"][0]) == {"name", "from", "to", "tag", "after", "files"}
 
@@ -242,3 +250,28 @@ def test_worktree_unparsable_source_names_stream_and_file(repo, cfg):
     repo.write("api-schema/openapi.json", "{not json")
     with pytest.raises(ConfigError, match="stream 'schema'.*api-schema/openapi.json"):
         plan_of(repo, cfg, worktree=True)
+
+
+def test_plan_json_warnings_roundtrip_and_default():
+    p = Plan("r", "b", [], [], "", "")
+    assert p.warnings == [] and p.to_dict()["warnings"] == []
+    d = p.to_dict()
+    del d["warnings"]
+    assert Plan.from_dict(d).warnings == []
+    p.warnings.append("w")
+    assert Plan.from_json(p.to_json()).warnings == ["w"]
+
+
+def test_unusable_lockfile_is_a_plan_warning_not_a_file(repo):
+    repo.write("package.json", '{"name": "web", "version": "1.0.0"}\n')
+    repo.write("package-lock.json", '{"name": "web", "version": "1.0.0", "lockfileVersion": 1}\n')
+    repo.commit("chore(version): seed")
+    repo.write("x.txt", "x")
+    repo.commit("fix: x")
+    config = parse_config(
+        '[[stream]]\nname = "web"\n'
+        'source = { file = "package.json", format = "json-path", path = "version" }\n'
+    )
+    plan = compute_plan(repo.path, config)
+    assert plan.streams[0].files == ["package.json"]
+    assert len(plan.warnings) == 1 and "lockfileVersion" in plan.warnings[0]

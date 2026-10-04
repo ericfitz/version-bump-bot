@@ -88,3 +88,11 @@ def test_bump_prints_of_commit_derived_text_are_wrapped_in_stop_commands():
             f"line {i + 1}: no resume token after the print"
         )
     assert "uuidgen" in "\n".join(lines)
+
+
+def test_bump_emits_plan_warnings_escaped():
+    text = (ROOT / ".github/workflows/bump.yml").read_text()
+    plan_step = text[text.index("- name: Plan") : text.index("bumped=")]
+    assert "::warning::" in plan_step
+    assert 'gsub("%";"%25")' in plan_step
+    assert 'gsub("\\r";"%0D")' in plan_step and 'gsub("\\n";"%0A")' in plan_step

@@ -98,6 +98,7 @@ jobs:
           echo "::stop-commands::${STOP_TOKEN}"
           cat "$RUNNER_TEMP/plan.json"
           echo "::${STOP_TOKEN}::"
+          jq -r '.warnings[]? | gsub("%";"%25") | gsub("\r";"%0D") | gsub("\n";"%0A") | "::warning::" + .' "$RUNNER_TEMP/plan.json"
           echo "bumped=$(jq '.streams | length' "$RUNNER_TEMP/plan.json")" >> "$GITHUB_OUTPUT"
           if [ "$(jq '.streams | length' "$RUNNER_TEMP/plan.json")" = "0" ]; then
             echo "::notice::Nothing to bump."
