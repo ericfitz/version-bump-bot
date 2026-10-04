@@ -12,7 +12,7 @@ from version_bump.config import Config, Stream
 from version_bump.errors import ConfigError, GuardError, VersionBumpError
 from version_bump.formats import read_full, read_partial
 from version_bump.jsonpos import delete_json_paths
-from version_bump.lockfiles import discover, read_entry, ref_reader, worktree_reader
+from version_bump.lockfiles import discover, read_entry, ref_reader, tracked_reader
 from version_bump.pathglob import all_match, matches_any
 from version_bump.semver import Version, bump_level
 
@@ -186,7 +186,7 @@ def is_triggered(repo: Path, stream: Stream, sha: str, changed: list[str]) -> bo
 
 def _check_worktree_consistency(repo: Path, config: Config) -> None:
     bad: list[str] = []
-    locks = discover(config, worktree_reader(repo))
+    locks = discover(config, tracked_reader(repo))
     for stream in config.streams:
         src = _worktree_value(repo, stream)
         for t in stream.targets:

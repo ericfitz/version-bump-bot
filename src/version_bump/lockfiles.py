@@ -153,6 +153,13 @@ def worktree_reader(repo: Path) -> Reader:
     return read
 
 
+def tracked_reader(repo: Path) -> Reader:
+    """Working-tree text, but only for files tracked at HEAD: the bump commits with `git add -u`,
+    so an untracked or ignored lockfile must never be written or checked."""
+    worktree = worktree_reader(repo)
+    return lambda rel: worktree(rel) if gitops.show_file(repo, "HEAD", rel) is not None else None
+
+
 def ref_reader(repo: Path, ref: str) -> Reader:
     return lambda rel: gitops.show_file(repo, ref, rel)
 

@@ -63,6 +63,8 @@ Detection runs wherever the config's streams are resolved for `plan`, `apply`, `
 
 - **`plan`** adds each discovered lockfile to the stream's `files`, so it is pre-checked, written and committed like any target. Skipped lockfiles are reported in a new `warnings` list in the plan JSON.
 - **`apply`** writes each lockfile entry after the stream's targets.
+- **`apply` repairs drift in other streams.** It also rewrites drifted entries in streams this plan does not bump, setting them to their stream's current version. Without that, the re-plan check below would fail the whole release over a stale entry in an unrelated stream (decision 16). *(Agent ruling, 2026-10-03, after the final review.)*
+- **Only committed lockfiles.** `apply` and the re-plan check consider only lockfiles that are tracked at HEAD, because the bump commits with `git add -u`.
 - **Re-plan check.** The empty re-plan after `apply` must also find every lockfile entry in agreement.
 - **Warnings.** The bump workflow prints each warning as `::warning::`.
 - **`guard`.** A lockfile entry fails the guard only if the PR **changed** it **and** the new value differs from the manifest's version at head. As a result:

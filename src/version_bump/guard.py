@@ -99,6 +99,6 @@ def run_verify(repo: Path, config: Config) -> list[str]:
 def guard(repo: Path, config: Config, base: str, head: str = "HEAD") -> GuardResult:
     result = check_values(repo, config, base, head)
     if result.violations:
-        raise GuardError("\n".join(result.violations))
+        raise GuardError("\n".join(result.violations + [f"warning: {w}" for w in result.warnings]))
     run_verify(repo, config)
     return result

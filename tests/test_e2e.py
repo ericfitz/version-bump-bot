@@ -186,3 +186,59 @@ def test_worktree_replan_fails_when_lockfile_disagrees(repo, capsys):
     repo.write("uv.lock", UV_LOCK % "1.0.0")
     rc, _, err = cli(repo, "plan", "--worktree", capsys=capsys)
     assert rc == 1 and "lockfile uv.lock has app 1.0.0, source has 1.0.1" in err
+
+
+TWO_STREAMS = """
+[[stream]]
+name = "a"
+source = { file = "a/pyproject.toml", format = "toml-path", path = "project.version" }
+trigger = { changed = ["a/**"] }
+
+[[stream]]
+name = "b"
+source = { file = "b/pyproject.toml", format = "toml-path", path = "project.version" }
+trigger = { changed = ["b/**"] }
+"""
+
+
+def _lock(name, version):
+    return f'[[package]]\nname = "{name}"\nversion = "{version}"\nsource = {{ editable = "." }}\n'
+
+
+def test_bump_repairs_drift_in_a_stream_it_does_not_bump(repo, capsys):
+    repo.write(".github/version-bump.toml", TWO_STREAMS)
+    for name in "ab":
+        repo.write(f"{name}/pyproject.toml", f'[project]\nname = "{name}"\nversion = "1.0.0"\n')
+    repo.write("a/uv.lock", _lock("a", "0.9.0"))  # pre-existing drift
+    repo.write("b/uv.lock", _lock("b", "1.0.0"))
+    repo.commit("chore(version): seed")
+    repo.write("b/x.txt", "x")
+    repo.commit("fix: b only")
+
+    rc, out, _ = cli(repo, "plan", capsys=capsys)
+    assert [s["name"] for s in json.loads(out)["streams"]] == ["b"]
+    plan_file = repo.path.parent / "plan.json"
+    plan_file.write_text(out)
+    rc, out, _ = cli(repo, "apply", "--plan", str(plan_file), capsys=capsys)
+    assert rc == 0 and "a/uv.lock" in out.split()
+    assert (repo.path / "a/uv.lock").read_text() == _lock("a", "1.0.0")
+    assert (repo.path / "b/uv.lock").read_text() == _lock("b", "1.0.1")
+    rc, out, _ = cli(repo, "plan", "--worktree", capsys=capsys)
+    assert rc == 0 and json.loads(out)["streams"] == []
+
+
+def test_apply_leaves_untracked_lockfiles_alone(repo, capsys):
+    repo.write(".github/version-bump.toml", UV_CONFIG)
+    repo.write("pyproject.toml", '[project]\nname = "app"\nversion = "1.0.0"\n')
+    repo.commit("chore(version): seed")
+    repo.write("src.txt", "x\n")
+    repo.commit("fix: something")
+    rc, out, _ = cli(repo, "plan", capsys=capsys)
+    plan_file = repo.path.parent / "plan.json"
+    plan_file.write_text(out)
+    repo.write("uv.lock", UV_LOCK % "1.0.0")  # untracked, e.g. git-ignored
+    rc, out, _ = cli(repo, "apply", "--plan", str(plan_file), capsys=capsys)
+    assert rc == 0 and out.split() == ["pyproject.toml"]
+    assert (repo.path / "uv.lock").read_text() == UV_LOCK % "1.0.0"
+    rc, out, _ = cli(repo, "plan", "--worktree", capsys=capsys)
+    assert rc == 0 and json.loads(out)["streams"] == []
