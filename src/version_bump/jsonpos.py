@@ -131,9 +131,14 @@ class _Scanner:
             return self.find(parts[1:], path)
 
 
-def locate_json_value(text: str, path: str) -> tuple[int, int]:
+def locate_json_keys(text: str, keys: list[str]) -> tuple[int, int]:
+    """Span of the scalar at an explicit key list (keys may contain '.', '/' or be empty)."""
     try:
         json.loads(text)
     except json.JSONDecodeError as exc:
         raise FormatError(f"invalid JSON: {exc.msg} at line {exc.lineno}") from None
-    return _Scanner(text).find(split_path(path), path)
+    return _Scanner(text).find(keys, "/".join(keys))
+
+
+def locate_json_value(text: str, path: str) -> tuple[int, int]:
+    return locate_json_keys(text, split_path(path))

@@ -7,8 +7,9 @@ from pathlib import Path
 
 from version_bump import gitops
 from version_bump.config import Config
-from version_bump.errors import GuardError
+from version_bump.errors import GuardError, VersionBumpError
 from version_bump.formats import FileSpec, read_full, read_partial
+from version_bump.lockfiles import discover, read_entry, ref_reader
 from version_bump.shell import run_commands
 
 _SUFFIX = "; only the post-merge bump may write it"
@@ -18,6 +19,7 @@ _SUFFIX = "; only the post-merge bump may write it"
 class GuardResult:
     violations: list[str] = field(default_factory=list)
     skipped: list[str] = field(default_factory=list)
+    warnings: list[str] = field(default_factory=list)
 
 
 def _value_text(repo: Path, ref: str, spec: FileSpec, full: bool) -> str | None:
@@ -57,6 +59,33 @@ def check_values(repo: Path, config: Config, base: str, head: str) -> GuardResul
                 result.violations.append(
                     f"{stream.name}: {target.file} changed {t_base} -> {shown}{_SUFFIX}"
                 )
+    locks = discover(config, ref_reader(repo, head))
+    result.warnings += locks.warnings
+    for e in locks.entries:
+        try:
+            want = read_full(gitops.show_file(repo, head, e.manifest.file) or "", e.manifest)
+            got = read_entry(gitops.show_file(repo, head, e.file) or "", e)
+        except VersionBumpError as exc:
+            result.warnings.append(f"{e.stream}: {e.file} not checked: {exc}")
+            continue
+        if got == want:
+            continue
+        base_text = gitops.show_file(repo, base, e.file)
+        try:
+            before = read_entry(base_text, e) if base_text is not None else None
+        except VersionBumpError:
+            before = None
+        if before == got:
+            result.warnings.append(
+                f"{e.stream}: {e.file} records {e.name} {got} but {e.manifest.file} has {want}; "
+                "the next bump will fix it"
+            )
+        else:
+            shown = "<absent>" if before is None else str(before)
+            result.violations.append(
+                f"{e.stream}: {e.file} changed {e.name} {shown} -> {got}, but {e.manifest.file} "
+                f"has {want}; a lockfile entry may only change to match its manifest"
+            )
     return result
 
 
@@ -70,6 +99,6 @@ def run_verify(repo: Path, config: Config) -> list[str]:
 def guard(repo: Path, config: Config, base: str, head: str = "HEAD") -> GuardResult:
     result = check_values(repo, config, base, head)
     if result.violations:
-        raise GuardError("\n".join(result.violations))
+        raise GuardError("\n".join(result.violations + [f"warning: {w}" for w in result.warnings]))
     run_verify(repo, config)
     return result

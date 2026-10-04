@@ -20,6 +20,7 @@
 11. **The App holds Workflows read/write (2026-10-03).** A bump commit that rewrites a file under `.github/workflows/` is rejected without it. This repo's own targets are `bump.yml` and `guard.yml`, and adopters can have the same kind of target.
 12. **The bump commit and its tags go up in one `git push --atomic` (2026-10-03, confirming an agent ruling).** Either both land or neither does, so `main` never carries a bumped version without its tag. The trade-off: if an adopter adds a tag ruleset without the App as a bypass actor, the whole release fails instead of releasing without a tag. The error names the fix.
 13. **deps-bump-bot PRs get no special treatment (2026-10-03).** Their titles are not `feat` or breaking, so each one bumps patch.
+14-16. Lockfile sync (1.1.0): see `2026-10-03-lockfile-sync-design.md`.
 ## Goals
 
 - Installing the bot on any repo gives exactly one version increment per merged PR, with no PR-time edits to version files, no merge conflicts on version state, and no checks that fail transiently.

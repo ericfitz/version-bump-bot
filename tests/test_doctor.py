@@ -193,3 +193,20 @@ def test_cmd_doctor_exit_codes_and_env_app_id(repo, monkeypatch, capsys):
     assert main(args) == 1
     captured = capsys.readouterr()
     assert "app id must be an integer" in captured.err and "Traceback" not in captured.err
+
+
+def test_lists_synced_lockfiles(tmp_path):
+    cfg = tmp_path / ".github" / "version-bump.toml"
+    cfg.parent.mkdir()
+    cfg.write_text(
+        '[[stream]]\nname = "app"\n'
+        'source = { file = "pyproject.toml", format = "toml-path", path = "project.version" }\n'
+    )
+    (tmp_path / "pyproject.toml").write_text('[project]\nname = "app"\nversion = "1.0.0"\n')
+    (tmp_path / "uv.lock").write_text(
+        '[[package]]\nname = "app"\nversion = "1.0.0"\nsource = { editable = "." }\n'
+    )
+    findings = run_doctor("ericfitz/example", cfg, fetcher(), app_id=123456, repo_dir=tmp_path)
+    locks = [f for f in findings if f.check == "lockfile"]
+    assert len(locks) == 1 and locks[0].ok
+    assert "uv.lock" in locks[0].detail and "'app'" in locks[0].detail

@@ -119,3 +119,73 @@ def test_cli_guard(repo, cfg, capsys):
     repo.commit("fix: hand bump")
     assert main(["--repo", str(repo.path), "guard", "--base", base, "--head", "HEAD"]) == 1
     assert ".version changed 1.8.16 -> 9.0.0" in capsys.readouterr().err
+
+
+UV_CFG = parse_config(
+    '[[stream]]\nname = "app"\n'
+    'source = { file = "pyproject.toml", format = "toml-path", path = "project.version" }\n'
+)
+
+
+def uv_lock(version, name="app"):
+    return f'[[package]]\nname = "{name}"\nversion = "{version}"\nsource = {{ editable = "." }}\n'
+
+
+def seed_uv(repo, version, lock_version):
+    repo.write("pyproject.toml", f'[project]\nname = "app"\nversion = "{version}"\n')
+    repo.write("uv.lock", uv_lock(lock_version))
+    return repo.commit("chore(version): seed")
+
+
+def test_lockfile_drifting_edit_fails(repo):
+    base = seed_uv(repo, "1.0.0", "1.0.0")
+    repo.write("uv.lock", uv_lock("1.0.5"))
+    repo.commit("fix: hand edit")
+    with pytest.raises(GuardError, match=r"uv\.lock changed app 1\.0\.0 -> 1\.0\.5.*has 1\.0\.0"):
+        guard(repo.path, UV_CFG, base)
+
+
+def test_lockfile_repair_passes(repo):
+    base = seed_uv(repo, "1.0.0", "0.1.0")
+    repo.write("uv.lock", uv_lock("1.0.0"))
+    repo.commit("fix: repair lock")
+    result = guard(repo.path, UV_CFG, base)
+    assert result.violations == [] and result.warnings == []
+
+
+def test_lockfile_untouched_drift_warns(repo):
+    base = seed_uv(repo, "1.0.0", "0.1.0")
+    repo.write("README.txt", "hi\n")
+    repo.commit("fix: unrelated")
+    result = guard(repo.path, UV_CFG, base)
+    assert len(result.warnings) == 1 and "uv.lock" in result.warnings[0]
+
+
+def test_unusable_lockfile_is_reported_not_failed(repo):
+    repo.write("pyproject.toml", '[project]\nname = "app"\nversion = "1.0.0"\n')
+    repo.write("uv.lock", uv_lock("1.0.0", name="other"))
+    base = repo.commit("chore(version): seed")
+    repo.write("README.txt", "hi\n")
+    repo.commit("fix: unrelated")
+    result = guard(repo.path, UV_CFG, base)
+    assert len(result.warnings) == 1 and "exactly one" in result.warnings[0]
+
+
+def test_guard_failure_message_includes_warnings(repo):
+    two = parse_config(
+        '[[stream]]\nname = "app"\n'
+        'source = { file = "pyproject.toml", format = "toml-path", path = "project.version" }\n'
+        '[[stream]]\nname = "lib"\n'
+        'source = { file = "lib/pyproject.toml", format = "toml-path", path = "project.version" }\n'
+    )
+    repo.write("pyproject.toml", '[project]\nname = "app"\nversion = "1.0.0"\n')
+    repo.write("uv.lock", uv_lock("1.0.0"))
+    repo.write("lib/pyproject.toml", '[project]\nname = "lib"\nversion = "2.0.0"\n')
+    repo.write("lib/uv.lock", uv_lock("1.9.0", name="lib"))  # untouched drift
+    base = repo.commit("chore(version): seed")
+    repo.write("uv.lock", uv_lock("1.0.5"))
+    repo.commit("fix: hand edit")
+    with pytest.raises(
+        GuardError, match=r"(?s)uv\.lock changed.*warning: lib: lib/uv\.lock records"
+    ):
+        guard(repo.path, two, base)

@@ -12,6 +12,7 @@ from version_bump.config import Config, Stream
 from version_bump.errors import ConfigError, GuardError, VersionBumpError
 from version_bump.formats import read_full, read_partial
 from version_bump.jsonpos import delete_json_paths
+from version_bump.lockfiles import discover, read_entry, ref_reader, tracked_reader
 from version_bump.pathglob import all_match, matches_any
 from version_bump.semver import Version, bump_level
 
@@ -57,6 +58,7 @@ class Plan:
     streams: list[StreamPlan]
     commit_subject: str
     commit_body: str
+    warnings: list[str] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -66,6 +68,7 @@ class Plan:
             "streams": [s.to_dict() for s in self.streams],
             "commit_subject": self.commit_subject,
             "commit_body": self.commit_body,
+            "warnings": list(self.warnings),
         }
 
     def to_json(self) -> str:
@@ -82,6 +85,7 @@ class Plan:
             streams=[StreamPlan.from_dict(s) for s in d["streams"]],
             commit_subject=d["commit_subject"],
             commit_body=d["commit_body"],
+            warnings=list(d.get("warnings", [])),
         )
 
     @classmethod
@@ -182,6 +186,7 @@ def is_triggered(repo: Path, stream: Stream, sha: str, changed: list[str]) -> bo
 
 def _check_worktree_consistency(repo: Path, config: Config) -> None:
     bad: list[str] = []
+    locks = discover(config, tracked_reader(repo))
     for stream in config.streams:
         src = _worktree_value(repo, stream)
         for t in stream.targets:
@@ -192,6 +197,12 @@ def _check_worktree_consistency(repo: Path, config: Config) -> None:
             got = read_partial(_read_text(p), t)
             if not got.matches(src):
                 bad.append(f"{stream.name}: target {t.file} has {got.text}, source has {src}")
+        for e in locks.for_stream(stream.name):
+            got_lock = read_entry(_read_text(repo / e.file), e)
+            if got_lock != src:
+                bad.append(
+                    f"{stream.name}: lockfile {e.file} has {e.name} {got_lock}, source has {src}"
+                )
     if bad:
         raise GuardError("working tree is not self-consistent: " + "; ".join(bad))
 
@@ -209,6 +220,7 @@ def _message(streams: list[StreamPlan], pending: list[PendingCommit]) -> tuple[s
 def compute_plan(repo: Path, config: Config, ref: str = "HEAD", worktree: bool = False) -> Plan:
     ref_sha = gitops.rev_parse(repo, ref)
     current = {s.name: _current_value(repo, s, ref_sha) for s in config.streams}
+    locks = discover(config, ref_reader(repo, ref_sha))
     if worktree:
         _check_worktree_consistency(repo, config)
         tree = {s.name: _worktree_value(repo, s) for s in config.streams}
@@ -220,6 +232,7 @@ def compute_plan(repo: Path, config: Config, ref: str = "HEAD", worktree: bool =
                 streams=[],
                 commit_subject="",
                 commit_body="",
+                warnings=list(locks.warnings),
             )
     base = find_base(repo, config, ref_sha)
     pending: list[PendingCommit] = []
@@ -244,7 +257,13 @@ def compute_plan(repo: Path, config: Config, ref: str = "HEAD", worktree: bool =
             to_version=str(to[s.name]),
             tag=render_tag(s.tag, to[s.name]) if s.tag else None,
             after=list(s.after),
-            files=list(dict.fromkeys([s.source.file] + [t.file for t in s.targets])),
+            files=list(
+                dict.fromkeys(
+                    [s.source.file]
+                    + [t.file for t in s.targets]
+                    + [e.file for e in locks.for_stream(s.name)]
+                )
+            ),
         )
         for s in config.streams
         if s.name in bumped
@@ -257,4 +276,5 @@ def compute_plan(repo: Path, config: Config, ref: str = "HEAD", worktree: bool =
         streams=streams,
         commit_subject=subject,
         commit_body=body,
+        warnings=list(locks.warnings),
     )
