@@ -4,12 +4,17 @@
 from __future__ import annotations
 
 import json
+import posixpath
 import re
 import tomllib
-from dataclasses import dataclass
+from collections.abc import Callable
+from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any
 
-from version_bump.errors import FormatError
+from version_bump import gitops
+from version_bump.config import Config
+from version_bump.errors import FormatError, VersionBumpError
 from version_bump.formats import FileSpec
 from version_bump.jsonpos import locate_json_keys
 from version_bump.semver import Version
@@ -135,3 +140,118 @@ def write_entry(text: str, entry: LockEntry, v: Version) -> str:
     if entry.kind == "npm":
         return _npm_write(entry, text, v)
     return _toml_write(entry, text, v)
+
+
+Reader = Callable[[str], "str | None"]
+
+
+def worktree_reader(repo: Path) -> Reader:
+    def read(rel: str) -> str | None:
+        p = repo / rel
+        return p.read_bytes().decode("utf-8", "surrogateescape") if p.is_file() else None
+
+    return read
+
+
+def ref_reader(repo: Path, ref: str) -> Reader:
+    return lambda rel: gitops.show_file(repo, ref, rel)
+
+
+@dataclass(frozen=True)
+class _Manifest:
+    format: str
+    path: str
+    name_keys: tuple[str, ...]
+    lockfiles: tuple[str, ...]  # per directory, in preference order
+    kind: str
+
+
+_MANIFESTS = {
+    "pyproject.toml": _Manifest(
+        "toml-path", "project.version", ("project", "name"), ("uv.lock",), "uv"
+    ),
+    "package.json": _Manifest(
+        "json-path", "version", ("name",), ("npm-shrinkwrap.json", "package-lock.json"), "npm"
+    ),
+    "Cargo.toml": _Manifest(
+        "toml-path", "package.version", ("package", "name"), ("Cargo.lock",), "cargo"
+    ),
+}
+
+
+@dataclass
+class Discovery:
+    entries: list[LockEntry] = field(default_factory=list)
+    warnings: list[str] = field(default_factory=list)
+
+    def for_stream(self, name: str) -> list[LockEntry]:
+        return [e for e in self.entries if e.stream == name]
+
+
+def _manifest_kind(spec: FileSpec) -> _Manifest | None:
+    m = _MANIFESTS.get(posixpath.basename(spec.file))
+    if m is not None and spec.format == m.format and spec.path == m.path:
+        return m
+    return None
+
+
+def _project_name(where: str, text: str, m: _Manifest) -> str:
+    try:
+        obj: Any = json.loads(text) if m.kind == "npm" else tomllib.loads(text)
+    except (json.JSONDecodeError, tomllib.TOMLDecodeError) as exc:
+        raise FormatError(f"{where}: cannot parse: {exc}") from None
+    for key in m.name_keys:
+        obj = obj.get(key) if isinstance(obj, dict) else None
+    if not isinstance(obj, str) or not obj:
+        raise FormatError(f"{where}: no {'.'.join(m.name_keys)} to identify the lockfile entry")
+    return obj
+
+
+def _find_lockfile(read: Reader, manifest_file: str, m: _Manifest) -> str | None:
+    d = posixpath.dirname(manifest_file)
+    while True:
+        for name in m.lockfiles:
+            rel = posixpath.join(d, name) if d else name
+            if read(rel) is not None:
+                return rel
+        if not d:
+            return None
+        d = posixpath.dirname(d)
+
+
+def discover(config: Config, read: Reader) -> Discovery:
+    found = Discovery()
+    owner: dict[tuple[str, str, str], str] = {}
+    for stream in config.streams:
+        for spec in (stream.source, *stream.targets):
+            m = _manifest_kind(spec)
+            if m is None:
+                continue
+            text = read(spec.file)
+            lock = _find_lockfile(read, spec.file, m) if text is not None else None
+            if text is None or lock is None:
+                continue
+            try:
+                name = _project_name(spec.file, text, m)
+                member = ""
+                if m.kind == "npm":
+                    rel = posixpath.relpath(
+                        posixpath.dirname(spec.file) or ".", posixpath.dirname(lock) or "."
+                    )
+                    member = "" if rel == "." else rel
+                entry = LockEntry(stream.name, spec, lock, m.kind, name, member)
+                read_entry(read(lock) or "", entry)
+            except VersionBumpError as exc:
+                found.warnings.append(f"{stream.name}: {lock} not synced: {exc}")
+                continue
+            key = (entry.file, entry.name, entry.member)
+            if key in owner:
+                if owner[key] != stream.name:
+                    found.warnings.append(
+                        f"{stream.name}: {lock} entry {name!r} is already synced by "
+                        f"stream {owner[key]!r}; not synced again"
+                    )
+                continue
+            owner[key] = stream.name
+            found.entries.append(entry)
+    return found

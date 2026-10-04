@@ -2,9 +2,10 @@ import json
 
 import pytest
 
+from version_bump.config import parse_config
 from version_bump.errors import FormatError
 from version_bump.formats import FileSpec
-from version_bump.lockfiles import LockEntry, read_entry, write_entry
+from version_bump.lockfiles import LockEntry, discover, read_entry, write_entry
 from version_bump.semver import Version
 
 PY = FileSpec("pyproject.toml", "toml-path", path="project.version")
@@ -170,3 +171,110 @@ def test_npm_lockfile_version_2_supported():
     obj["lockfileVersion"] = 2
     e = LockEntry("s", PKG, "package-lock.json", "npm", "web", "")
     assert read_entry(json.dumps(obj), e) == Version(2, 0, 0)
+
+
+def reader(files):
+    return lambda rel: files.get(rel)
+
+
+def cfg(*streams):
+    return parse_config("\n".join(streams))
+
+
+PY_STREAM = '[[stream]]\nname = "app"\nsource = { file = "%s", format = "toml-path", path = "project.version" }\n'
+
+
+def test_discovers_sibling_uv_lock():
+    files = {
+        "pyproject.toml": '[project]\nname = "my-proj"\nversion = "0.1.0"\n',
+        "uv.lock": UV_LOCK,
+    }
+    d = discover(cfg(PY_STREAM % "pyproject.toml"), reader(files))
+    assert [(e.file, e.kind, e.name) for e in d.entries] == [("uv.lock", "uv", "my-proj")]
+    assert d.warnings == []
+    assert d.for_stream("app") == d.entries and d.for_stream("other") == []
+
+
+def test_walks_up_to_workspace_root_and_nearest_wins():
+    member = '[project]\nname = "ws"\nversion = "1.2.3"\n'
+    ws_lock = '[[package]]\nname = "ws"\nversion = "1.2.3"\nsource = { editable = "pkgs/ws" }\n'
+    files = {"pkgs/ws/pyproject.toml": member, "uv.lock": ws_lock}
+    d = discover(cfg(PY_STREAM % "pkgs/ws/pyproject.toml"), reader(files))
+    assert [e.file for e in d.entries] == ["uv.lock"]
+    files["pkgs/uv.lock"] = ws_lock
+    d = discover(cfg(PY_STREAM % "pkgs/ws/pyproject.toml"), reader(files))
+    assert [e.file for e in d.entries] == ["pkgs/uv.lock"]
+
+
+def test_no_lockfile_anywhere_is_silent():
+    files = {"sub/pyproject.toml": '[project]\nname = "x"\nversion = "1.0.0"\n'}
+    d = discover(cfg(PY_STREAM % "sub/pyproject.toml"), reader(files))
+    assert d.entries == [] and d.warnings == []
+
+
+def test_npm_member_path_and_shrinkwrap_preference():
+    pkg = '{"name": "@web/ui", "version": "0.4.0"}\n'
+    files = {"packages/ui/package.json": pkg, "package-lock.json": NPM_LOCK}
+    stream = '[[stream]]\nname = "ui"\nsource = { file = "packages/ui/package.json", format = "json-path", path = "version" }\n'
+    d = discover(cfg(stream), reader(files))
+    assert [(e.file, e.member) for e in d.entries] == [("package-lock.json", "packages/ui")]
+    files["npm-shrinkwrap.json"] = NPM_LOCK
+    assert discover(cfg(stream), reader(files)).entries[0].file == "npm-shrinkwrap.json"
+
+
+def test_manifest_without_name_warns_and_skips():
+    files = {"package.json": '{"version": "2.0.0"}\n', "package-lock.json": NPM_LOCK}
+    stream = '[[stream]]\nname = "web"\nsource = { file = "package.json", format = "json-path", path = "version" }\n'
+    d = discover(cfg(stream), reader(files))
+    assert d.entries == []
+    assert len(d.warnings) == 1 and "package-lock.json" in d.warnings[0] and "name" in d.warnings[0]
+
+
+def test_unusable_entry_warns_and_skips():
+    files = {
+        "pyproject.toml": '[project]\nname = "absent"\nversion = "0.1.0"\n',
+        "uv.lock": UV_LOCK,
+    }
+    d = discover(cfg(PY_STREAM % "pyproject.toml"), reader(files))
+    assert d.entries == [] and "exactly one" in d.warnings[0]
+
+
+def test_non_manifest_specs_are_ignored():
+    files = {
+        "Cargo.toml": '[workspace.package]\nversion = "1.0.0"\n',
+        "Cargo.lock": CARGO_LOCK,
+        "pyproject.toml": 'version = "1.0.0"\n',
+        "uv.lock": UV_LOCK,
+    }
+    streams = (
+        '[[stream]]\nname = "a"\nsource = { file = "Cargo.toml", format = "toml-path", path = "workspace.package.version" }\n'
+        '[[stream]]\nname = "b"\nsource = { file = "pyproject.toml", regex = \'version = "(?P<version>[0-9.]+)"\' }\n'
+    )
+    d = discover(cfg(streams), reader(files))
+    assert d.entries == [] and d.warnings == []
+
+
+def test_two_streams_sharing_one_entry_first_wins():
+    files = {
+        "pyproject.toml": '[project]\nname = "my-proj"\nversion = "0.1.0"\n',
+        "uv.lock": UV_LOCK,
+    }
+    two = PY_STREAM % "pyproject.toml" + (PY_STREAM % "pyproject.toml").replace('"app"', '"again"')
+    d = discover(cfg(two), reader(files))
+    assert [e.stream for e in d.entries] == ["app"]
+    assert len(d.warnings) == 1 and "'app'" in d.warnings[0]
+
+
+def test_manifest_as_target_is_discovered():
+    files = {
+        "Cargo.toml": '[package]\nname = "tool"\nversion = "0.3.1"\n',
+        "Cargo.lock": CARGO_LOCK,
+    }
+    stream = (
+        '[[stream]]\nname = "t"\nsource = { file = ".version", format = "json-semver" }\n'
+        'targets = [{ file = "Cargo.toml", format = "toml-path", path = "package.version" }]\n'
+    )
+    d = discover(cfg(stream), reader(files))
+    assert [(e.file, e.name, e.manifest.file) for e in d.entries] == [
+        ("Cargo.lock", "tool", "Cargo.toml")
+    ]
