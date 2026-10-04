@@ -13,3 +13,6 @@ What has been pushed to `origin`. Machine-local, in-flight state lives in the un
 - `release-alias.yml` created `v1` at 7bd0c65.
 - The follow-up `Version` run was skipped by the actor guard, and a re-plan finds nothing pending.
 - **v1.0.0 released.** Adopters pin `ericfitz/version-bump-bot/.github/workflows/bump.yml@v1`.
+- PR #3 `feat: sync lockfiles that record the project's own version` was squash-merged (cf2035e). Bump commit 75875d0 rewrote `pyproject.toml`, `uv.lock`, `bump.yml` and `guard.yml` to 1.1.0.
+- **v1.1.0 released**, and `v1` moved to 75875d0.
+- Lockfile sync: spec `docs/superpowers/specs/2026-10-03-lockfile-sync-design.md` (Eric's decisions 14-16), plan `docs/superpowers/plans/2026-10-03-lockfile-sync.md`.
