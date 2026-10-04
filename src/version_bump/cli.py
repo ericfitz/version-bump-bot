@@ -54,6 +54,8 @@ def cmd_guard(args: argparse.Namespace) -> int:
     print(f"OK: version state untouched ({checked} stream(s) checked)")
     for note in result.skipped:
         print(f"note: {note}")
+    for w in result.warnings:
+        print(f"warning: {w}")
     return 0
 
 
