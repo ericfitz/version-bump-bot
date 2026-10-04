@@ -5,7 +5,7 @@
 - Home: new repo `ericfitz/version-bump-bot` (this document is copied there as its founding spec)
 - Related: tmi PR #1024 (held, then superseded), tmi issue #627, ADRs `2026-09-28-adr-versioning-docs-skip-and-schema-decoupling.md` and `2026-10-02-adr-post-merge-version-bump.md`
 
-## Human-made decisions (Eric Fitzgerald, 2026-10-02 and 2026-10-03)
+## Human-made decisions (Eric Fitzgerald, 2026-10-02 to 2026-10-04)
 
 1. Versions are bumped **after merge on the default branch**, not inside each PR. In-PR bumps caused a conflict on every concurrent PR, plus a transient Version Check failure on every PR.
 2. Build **two portable bots, independent of any tmi repo**, that can be installed on any of Eric's repos: this **version-bump** bot, and **ericfitz-deps-bot** as a general dependency bot (separate design, later). They must work together gracefully. Coupling between them is not a goal in itself.
@@ -17,6 +17,9 @@
 8. **Implementation:** a standard-library-only Python CLI run with `uv`, pinned by tag (approach A, over generalized bash or a JavaScript action).
 9. **Test repositories are local only.** Tests and fixtures create scratch repos with `git init` in temp directories. They never add a remote, never call `gh repo create`, never push anywhere, and never create or delete repositories on GitHub.
 10. **Location (2026-10-03, revised the same day): one repo per bot**, `ericfitz/version-bump-bot` and later `ericfitz/deps-bump-bot`. This replaces an earlier choice of an `ericfitz/github-apps` monorepo: the bots share nothing at runtime, and separate repos give plain root workflows and tags, per-bot settings and alerts, one agent per repo, and deps-bump-bot as version-bump-bot's first outside adopter.
+11. **The App holds Workflows read/write (2026-10-03).** A bump commit that rewrites a file under `.github/workflows/` is rejected without it. This repo's own targets are `bump.yml` and `guard.yml`, and adopters can have the same kind of target.
+12. **The bump commit and its tags go up in one `git push --atomic` (2026-10-03, confirming an agent ruling).** Either both land or neither does, so `main` never carries a bumped version without its tag. The trade-off: if an adopter adds a tag ruleset without the App as a bypass actor, the whole release fails instead of releasing without a tag. The error names the fix.
+13. **deps-bump-bot PRs get no special treatment (2026-10-03).** Their titles are not `feat` or breaking, so each one bumps patch.
 ## Goals
 
 - Installing the bot on any repo gives exactly one version increment per merged PR, with no PR-time edits to version files, no merge conflicts on version state, and no checks that fail transiently.
@@ -43,7 +46,7 @@
 
 ### GitHub App: `ericfitz-version-bump`
 
-- Permissions: Contents read/write and Metadata read. No webhook events.
+- Permissions: Contents read/write, Workflows read/write (decision 11) and Metadata read. No webhook events.
 - On each adopting repo it is the **only** bypass actor on the default-branch ruleset, so it can push the bump commit and tags.
 - Secrets in each adopting repo: `VERSION_BUMP_APP_ID` and `VERSION_BUMP_APP_PRIVATE_KEY`. Repos that run Dependabot also need them in the Dependabot secret store. The guard needs no secrets.
 
@@ -140,7 +143,7 @@ Folded over every pending commit, oldest first, for each stream:
 5. Run each bumped stream's `after` hooks. A hook failure fails the job, and nothing is pushed.
 6. Re-run `plan` against the working tree, as if committed, and require nothing pending. This proves the commit is self-consistent.
 7. Make one commit, with subject `chore(version): bump <stream> to X.Y.Z[, <stream> to A.B.C]` and a body listing the folded commits.
-8. Create tags locally at that commit for streams that declare `tag`. This is idempotent: an existing tag on the same commit is fine, and an existing tag on a different commit is a hard error, raised before anything is pushed. It never moves a tag. Then push the commit and the tags to the default branch in one `git push --atomic`, so either both land or neither does. *(Agent ruling, 2026-10-03, pending Eric's review: the original text pushed the commit, then the tags; a failed tag push then left a bumped version with no tag and no recovery path.)*
+8. Create tags locally at that commit for streams that declare `tag`. This is idempotent: an existing tag on the same commit is fine, and an existing tag on a different commit is a hard error, raised before anything is pushed. It never moves a tag. Then push the commit and the tags to the default branch in one `git push --atomic`, so either both land or neither does. *(Decision 12. The original text pushed the commit, then the tags, so a failed tag push left a bumped version with no tag and no way to recover.)*
 9. **Push rejected:**
    - If the default branch moved, exit successfully; that merge's own run folds everything.
    - Otherwise, fail with a message pointing at the bypass actor.

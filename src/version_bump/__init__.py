@@ -1,4 +1,4 @@
-"""version-bump-bot: post-merge semantic-version bumps driven by .github/version-bump.toml."""
+"""version-bump-bot: post-merge semantic-version bumps and release tags driven by .github/version-bump.toml."""
 
 from importlib.metadata import PackageNotFoundError, version
 
