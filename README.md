@@ -129,7 +129,7 @@ Some lockfiles record the project's own version. The bot keeps that entry in syn
 
 ```toml
 [merge]
-skip_paths = ["docs/**", "PROGRESS.md", "**/*.md"]   # a commit touching only these bumps nothing
+skip_paths = ["docs/**", "**/*.md"]   # a commit touching only these bumps nothing
 
 [[stream]]
 name = "server"
